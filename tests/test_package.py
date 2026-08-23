@@ -35,9 +35,10 @@ def test_class_hierarchy():
 
 
 def test_console_main_is_callable():
-    from securefox.server import main
+    from securefox.server import cli, main
 
-    assert callable(main)
+    assert callable(main)      # async server coroutine entrypoint
+    assert callable(cli)       # sync console-script wrapper
 
 
 def test_secure_tools_register_target_arg():

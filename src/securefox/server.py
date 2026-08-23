@@ -815,7 +815,12 @@ async def main():
     await server.start_server()
 
 
-if __name__ == "__main__":
+def cli():
+    """Synchronous console-script entrypoint (see pyproject.toml).
+
+    pip console scripts invoke a plain function — ``main`` is async, so this
+    wrapper runs it on the event loop and maps interrupts/errors to logs.
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -826,3 +831,7 @@ if __name__ == "__main__":
         logger.info("Server stopped by user")
     except Exception as e:
         logger.error(f"Server error: {e}")
+
+
+if __name__ == "__main__":
+    cli()
