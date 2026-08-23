@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "secure-fox"
+version = "0.1.0"
+description = "Secure FoxMCP browser-control MCP server with domain validation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+repository = "https://github.com/prog76/mcp_secure-fox"
+dependencies = [
+    "fastmcp>=2.0.0",
+    "mcp>=1.0.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.30.0",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+securefox-mcp-server = "securefox.server:main"
+
+[project.urls]
+Homepage = "https://github.com/prog76/mcp_secure-fox"
+Documentation = "https://github.com/prog76/mcp_secure-fox#readme"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/securefox"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
