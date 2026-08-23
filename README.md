@@ -39,10 +39,11 @@ python -m pytest
 
 ## Releasing
 
-Manual release flow (workflows build/test/publish on tag):
+Manual release flow (the workflow tests/builds/publishes on tag):
 
-1. Bump `version` in `pyproject.toml` and `__init__.py` (keep them matching).
-2. Commit, `git tag vX.Y.Z`, `git push && git push --tags`.
-3. The workflow tests, publishes the wheel/sdist to PyPI (OIDC), and pushes
-   `ghcr.io/prog76/mcp-secure-fox:vX.Y.Z`.
-4. Manually pin the new version where it is consumed (deploy Dockerfile).
+1. Bump `version` in `pyproject.toml`, `_version.py`, and `__init__.py`
+   (keep them matching).
+2. Commit, `git tag vX.Y.Z`, then `git push && git push --tags`.
+3. The workflow runs tests and pushes `ghcr.io/prog76/mcp-secure-fox:vX.Y.Z`.
+4. Manually pin the new version where it is consumed (deploy `.env`,
+   `SECUREFOX_VERSION`). Packages are installed from git refs, not PyPI.
