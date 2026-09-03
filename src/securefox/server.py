@@ -778,8 +778,13 @@ async def main():
     )
     parser.add_argument(
         "--host",
-        default="localhost",
-        help="Host to bind to (default: localhost)",
+        default=None,
+        help=(
+            "Host to bind to. Defaults to 'localhost' for security when omitted. "
+            "Pass '0.0.0.0' explicitly to accept connections from other "
+            "containers (required for the gateway to discover/proxy to this "
+            "backend across the Docker network)."
+        ),
     )
     parser.add_argument(
         "--ws-port",
@@ -801,9 +806,11 @@ async def main():
 
     args = parser.parse_args()
 
-    # Ensure localhost-only binding for security
-    if args.host not in ("localhost", "127.0.0.1"):
-        logger.warning("Host '%s' changed to 'localhost' for security", args.host)
+    # Bind to loopback by default for security, but honor an explicit host
+    # (e.g. '0.0.0.0') so the gateway can reach this backend across the Docker
+    # network. Only a *defaulted* (None) value falls back to localhost; an
+    # operator-supplied --host is respected as-is.
+    if args.host is None:
         args.host = "localhost"
 
     server = SecureFoxMCPServer(

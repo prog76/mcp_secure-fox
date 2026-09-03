@@ -17,4 +17,6 @@ RUN pip install --no-cache-dir /build/secure-fox \
 EXPOSE 8765 9005
 
 ENTRYPOINT ["securefox-mcp-server"]
-CMD ["--mcp-port", "9005", "--ws-port", "8765"]
+# Bind 0.0.0.0 (default) so the gateway/proxy can reach this backend across the
+# Docker network; loopback-only binding causes ECONNREFUSED during discovery.
+CMD ["--host", "0.0.0.0", "--mcp-port", "9005", "--ws-port", "8765"]
