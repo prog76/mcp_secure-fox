@@ -187,7 +187,7 @@ class SecureFoxMCPTools(FoxMCPTools):
             active: bool = True,
             pinned: bool = False,
             window_id: Optional[int] = None,
-        ) -> str:
+        ) -> Dict[str, Any]:
             """Create a new browser tab
 
             Args:
@@ -195,6 +195,14 @@ class SecureFoxMCPTools(FoxMCPTools):
                 active: Whether the tab should be active (default: True)
                 pinned: Whether the tab should be pinned (default: False)
                 window_id: Window ID to create tab in (optional)
+
+            Returns:
+                A dict with keys: ``target`` (``domain_tabId``, e.g.
+                ``google.com_209`` — re-use as the ``target`` argument for
+                tabs_close, tabs_switch, navigation_go_to_url, etc.),
+                ``tab_id``, ``url``, ``title``, and ``message`` (human-readable
+                summary). When ``tab_id`` is present the ``target`` field is
+                always available for chaining into subsequent tab tools.
             """
             request = {
                 "id": str(uuid.uuid4()),
@@ -212,16 +220,31 @@ class SecureFoxMCPTools(FoxMCPTools):
             response = await self.websocket_server.send_request_and_wait(request)
 
             if "error" in response:
-                return f"Error creating tab: {response['error']}"
+                return {"error": f"Error creating tab: {response['error']}", "ok": False}
 
             if response.get("type") == "response" and "data" in response:
                 tab = response["data"].get("tab", {})
-                return (
-                    f"Created tab: ID {tab.get('id')} - "
-                    f"{tab.get('title', 'Loading...')} - {tab.get('url', url)}"
+                tab_id = tab.get('id')
+                tab_url = tab.get('url', url)
+                tab_title = tab.get('title', 'Loading...')
+                # Construct target identifier in 'domain_tabId' format so it
+                # can be used directly with tabs_close, tabs_switch, etc.
+                tab_domain = urlparse(tab_url).hostname or ""
+                target = f"{tab_domain}_{tab_id}" if tab_id is not None else ""
+                message = (
+                    f"Created tab: ID {tab_id} - {tab_title} - {tab_url}"
+                    + (f" (target: {target})" if target else "")
                 )
+                return {
+                    "ok": True,
+                    "target": target,
+                    "tab_id": tab_id,
+                    "url": tab_url,
+                    "title": tab_title,
+                    "message": message,
+                }
 
-            return "Unable to create tab"
+            return {"error": "Unable to create tab", "ok": False}
 
         @self.mcp.tool()
         async def tabs_close(target: str) -> str:
