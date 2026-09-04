@@ -42,7 +42,7 @@ def test_console_main_is_callable():
 
 
 def test_secure_tools_register_target_arg():
-    """Tab/domain tools expose a `target` arg (domain_tabId) rather than tab_id."""
+    """Tab tools expose a `target` arg (plain tab ID) rather than tab_id."""
     tools = SecureFoxMCPTools.__new__(SecureFoxMCPTools)
     # Do not start any network: just confirm the hook methods exist.
     assert hasattr(tools, "_validate_target")

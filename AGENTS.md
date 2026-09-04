@@ -5,7 +5,8 @@ Guidance for coding agents working in this repository.
 ## What this is
 `secure-fox` — standalone browser-control MCP server (Firefox extension over
 WebSocket :8765, MCP over HTTP :9005). Wraps vendored upstream FoxMCP with
-domain validation on tab-specific operations (`target: "domain_tabId"`).
+tab access control on tab-specific operations (only tabs created by MCP
+can be targeted by other tools).
 
 It is intentionally decoupled from the gateway: no imports either way — the
 gateway proxies to it via policy. In deploy it runs as its own container

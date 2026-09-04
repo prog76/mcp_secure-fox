@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Secure FoxMCP Server — wraps FoxMCP with domain validation for tab operations.
+Secure FoxMCP Server — wraps FoxMCP with tab access control for tab operations.
 
-Subclasses FoxMCPTools to replace tab_id: int with target: str ("domain_tabId")
-in all tab-specific tools, adding domain validation before execution.
+Subclasses FoxMCPTools to replace tab_id: int with target: str (a plain tab ID)
+in all tab-specific tools, allowing access only to tabs created by MCP.
 
 The Firefox extension connects via WebSocket (port 8765) unchanged.
 The MCP server runs on port 9005 for policy proxy discovery.
@@ -24,7 +24,7 @@ import subprocess
 import time
 import uuid
 from datetime import datetime
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Set, Tuple
 from urllib.parse import urlparse
 
 # Import FoxMCP upstream (vendored at securefox/foxmcp_vendored/)
@@ -43,13 +43,21 @@ CACHE_TTL = 5.0  # seconds — how long before a cache entry is considered stale
 
 
 class SecureFoxMCPTools(FoxMCPTools):
-    """Extends FoxMCPTools with domain validation on tab-specific operations.
+    """Extends FoxMCPTools with tab access control on tab-specific operations.
 
     Overrides _setup_tab_tools, _setup_navigation_tools, _setup_content_tools
-    to replace tab_id: int with target: str (format: "domain_tabId").
+    to replace tab_id: int with target: str (a plain tab ID, e.g. "123").
+    Only tabs created by MCP can be targeted by other tools — this is
+    enforced by tracking created tab IDs in ``_mcp_created_tabs``.
     All other tools (windows, history, bookmarks, request monitoring) are
     inherited unchanged from FoxMCPTools.
     """
+
+    # ------------------------------------------------------------------
+    # MCP-created tab tracking.  Only these tabs may be targeted by
+    # other tab tools (tabs_close, tabs_switch, navigation_*, etc.).
+    # ------------------------------------------------------------------
+    _mcp_created_tabs: Set[int] = set()
 
     # ------------------------------------------------------------------
     # Tab URL cache helpers
@@ -86,47 +94,24 @@ class SecureFoxMCPTools(FoxMCPTools):
         return entry["url"] if entry else None
 
     async def _validate_target(self, target: str) -> Tuple[Optional[int], Optional[str]]:
-        """Validate a target string in 'domain_tabId' format.
-
-        Parses target, fetches the tab's current URL, and verifies the
-        domain matches the expected domain (suffix match).
+        """Validate that *target* is a tab ID created by MCP.
 
         Returns:
             (tab_id, None) on success
             (None, error_message) on failure
         """
-        # Parse target: "domain_tabId" — split on last underscore
         try:
-            expected_domain, tab_id_str = target.rsplit("_", 1)
-            tab_id = int(tab_id_str)
-        except (ValueError, AttributeError):
+            tab_id = int(target)
+        except (ValueError, TypeError):
             return (
                 None,
-                f"Invalid target format: '{target}'. "
-                f"Expected 'domain_tabId' (e.g., 'google.com_123')",
+                f"Invalid tab ID: {target!r} (must be a number)",
             )
 
-        if not expected_domain:
-            return None, f"Invalid target: '{target}' — domain is empty"
-
-        # Get current URL of the tab
-        url = await self._get_tab_url(tab_id)
-        if url is None:
-            return None, f"Tab {tab_id} not found"
-
-        # Validate domain (suffix match, e.g. www.google.com ends with google.com)
-        actual_domain = urlparse(url).hostname or ""
-        if not actual_domain:
+        if tab_id not in self._mcp_created_tabs:
             return (
                 None,
-                f"Tab {tab_id} has no valid domain (current URL: {url})",
-            )
-
-        if not actual_domain.endswith(expected_domain):
-            return (
-                None,
-                f"Tab {tab_id} does not belong to {expected_domain} "
-                f"(current domain: {actual_domain})",
+                f"Tab {tab_id} was not created by MCP — access denied",
             )
 
         return tab_id, None
@@ -136,7 +121,7 @@ class SecureFoxMCPTools(FoxMCPTools):
     # ------------------------------------------------------------------
 
     def _setup_tab_tools(self):
-        """Override tabs_list, tabs_create (unchanged), tabs_close, tabs_switch, tabs_capture_screenshot (with target)."""
+        """Override tabs_list, tabs_create, tabs_close, tabs_switch, tabs_capture_screenshot."""
 
         @self.mcp.tool()
         async def tabs_list() -> str:
@@ -187,8 +172,8 @@ class SecureFoxMCPTools(FoxMCPTools):
             active: bool = True,
             pinned: bool = False,
             window_id: Optional[int] = None,
-        ) -> Dict[str, Any]:
-            """Create a new browser tab
+        ) -> str:
+            """Create a new browser tab.
 
             Args:
                 url: URL to open in the new tab
@@ -197,12 +182,9 @@ class SecureFoxMCPTools(FoxMCPTools):
                 window_id: Window ID to create tab in (optional)
 
             Returns:
-                A dict with keys: ``target`` (``domain_tabId``, e.g.
-                ``google.com_209`` — re-use as the ``target`` argument for
-                tabs_close, tabs_switch, navigation_go_to_url, etc.),
-                ``tab_id``, ``url``, ``title``, and ``message`` (human-readable
-                summary). When ``tab_id`` is present the ``target`` field is
-                always available for chaining into subsequent tab tools.
+                JSON string with keys: ``ok``, ``tab_id``, ``url``, ``title``.
+                The ``tab_id`` can be used as the ``target`` argument for
+                tabs_close, tabs_switch, navigation_go_to_url, etc.
             """
             request = {
                 "id": str(uuid.uuid4()),
@@ -220,38 +202,30 @@ class SecureFoxMCPTools(FoxMCPTools):
             response = await self.websocket_server.send_request_and_wait(request)
 
             if "error" in response:
-                return {"error": f"Error creating tab: {response['error']}", "ok": False}
+                return json.dumps({"ok": False, "error": f"Error creating tab: {response['error']}"})
 
             if response.get("type") == "response" and "data" in response:
                 tab = response["data"].get("tab", {})
                 tab_id = tab.get('id')
-                tab_url = tab.get('url', url)
-                tab_title = tab.get('title', 'Loading...')
-                # Construct target identifier in 'domain_tabId' format so it
-                # can be used directly with tabs_close, tabs_switch, etc.
-                tab_domain = urlparse(tab_url).hostname or ""
-                target = f"{tab_domain}_{tab_id}" if tab_id is not None else ""
-                message = (
-                    f"Created tab: ID {tab_id} - {tab_title} - {tab_url}"
-                    + (f" (target: {target})" if target else "")
-                )
-                return {
+                if tab_id is None:
+                    return json.dumps({"ok": False, "error": "Unable to create tab"})
+                # Track this tab so other tools can target it.
+                SecureFoxMCPTools._mcp_created_tabs.add(tab_id)
+                return json.dumps({
                     "ok": True,
-                    "target": target,
                     "tab_id": tab_id,
-                    "url": tab_url,
-                    "title": tab_title,
-                    "message": message,
-                }
+                    "url": tab.get('url', url),
+                    "title": tab.get('title', 'Loading...'),
+                })
 
-            return {"error": "Unable to create tab", "ok": False}
+            return json.dumps({"ok": False, "error": "Unable to create tab"})
 
         @self.mcp.tool()
         async def tabs_close(target: str) -> str:
-            """Close a browser tab
+            """Close a browser tab.
 
             Args:
-                target: Tab identifier in format 'domain_tabId' (e.g., 'google.com_123')
+                target: Tab ID (e.g., "123") — must be a tab created by MCP.
             """
             tab_id, error = await self._validate_target(target)
             if error:
@@ -270,6 +244,7 @@ class SecureFoxMCPTools(FoxMCPTools):
             if "error" in response:
                 return f"Error closing tab: {response['error']}"
             if response.get("type") == "response":
+                SecureFoxMCPTools._mcp_created_tabs.discard(tab_id)
                 return f"Successfully closed tab {tab_id}"
             elif response.get("type") == "error":
                 error_msg = response.get("data", {}).get("message", "Unknown error")
@@ -278,10 +253,10 @@ class SecureFoxMCPTools(FoxMCPTools):
 
         @self.mcp.tool()
         async def tabs_switch(target: str) -> str:
-            """Switch to a specific browser tab
+            """Switch to a specific browser tab.
 
             Args:
-                target: Tab identifier in format 'domain_tabId' (e.g., 'google.com_123')
+                target: Tab ID (e.g., "123") — must be a tab created by MCP.
             """
             tab_id, error = await self._validate_target(target)
             if error:
@@ -395,10 +370,10 @@ class SecureFoxMCPTools(FoxMCPTools):
 
         @self.mcp.tool()
         async def navigation_back(target: str) -> str:
-            """Navigate back in browser history for a tab
+            """Navigate back in browser history for a tab.
 
             Args:
-                target: Tab identifier in format 'domain_tabId' (e.g., 'google.com_123')
+                target: Tab ID (e.g., "123") — must be a tab created by MCP.
             """
             tab_id, error = await self._validate_target(target)
             if error:
@@ -425,10 +400,10 @@ class SecureFoxMCPTools(FoxMCPTools):
 
         @self.mcp.tool()
         async def navigation_forward(target: str) -> str:
-            """Navigate forward in browser history for a tab
+            """Navigate forward in browser history for a tab.
 
             Args:
-                target: Tab identifier in format 'domain_tabId' (e.g., 'google.com_123')
+                target: Tab ID (e.g., "123") — must be a tab created by MCP.
             """
             tab_id, error = await self._validate_target(target)
             if error:
@@ -455,10 +430,10 @@ class SecureFoxMCPTools(FoxMCPTools):
 
         @self.mcp.tool()
         async def navigation_reload(target: str, bypass_cache: bool = False) -> str:
-            """Reload a page in a tab
+            """Reload a page in a tab.
 
             Args:
-                target: Tab identifier in format 'domain_tabId' (e.g., 'google.com_123')
+                target: Tab ID (e.g., "123") — must be a tab created by MCP.
                 bypass_cache: Whether to bypass cache when reloading (default: False)
             """
             tab_id, error = await self._validate_target(target)
@@ -487,10 +462,10 @@ class SecureFoxMCPTools(FoxMCPTools):
 
         @self.mcp.tool()
         async def navigation_go_to_url(target: str, url: str) -> str:
-            """Navigate to a specific URL in a tab
+            """Navigate to a specific URL in a tab.
 
             Args:
-                target: Tab identifier in format 'domain_tabId' (e.g., 'google.com_123')
+                target: Tab ID (e.g., "123") — must be a tab created by MCP.
                 url: URL to navigate to
             """
             tab_id, error = await self._validate_target(target)
@@ -525,10 +500,10 @@ class SecureFoxMCPTools(FoxMCPTools):
 
         @self.mcp.tool()
         async def content_get_text(target: str, max_length: Optional[int] = None) -> str:
-            """Get text content from a tab's page
+            """Get text content from a tab's page.
 
             Args:
-                target: Tab identifier in format 'domain_tabId' (e.g., 'google.com_123')
+                target: Tab ID (e.g., "123") — must be a tab created by MCP.
                 max_length: Optional maximum length of text to return
             """
             tab_id, error = await self._validate_target(target)
@@ -568,10 +543,10 @@ class SecureFoxMCPTools(FoxMCPTools):
 
         @self.mcp.tool()
         async def content_get_html(target: str) -> str:
-            """Get HTML content from a tab's page
+            """Get HTML content from a tab's page.
 
             Args:
-                target: Tab identifier in format 'domain_tabId' (e.g., 'google.com_123')
+                target: Tab ID (e.g., "123") — must be a tab created by MCP.
             """
             tab_id, error = await self._validate_target(target)
             if error:
@@ -611,10 +586,10 @@ class SecureFoxMCPTools(FoxMCPTools):
 
         @self.mcp.tool()
         async def content_execute_script(target: str, code: str) -> str:
-            """Execute JavaScript code in a tab
+            """Execute JavaScript code in a tab.
 
             Args:
-                target: Tab identifier in format 'domain_tabId' (e.g., 'google.com_123')
+                target: Tab ID (e.g., "123") — must be a tab created by MCP.
                 code: JavaScript code to execute
             """
             tab_id, error = await self._validate_target(target)
@@ -660,7 +635,7 @@ class SecureFoxMCPTools(FoxMCPTools):
             """Execute a predefined external script and run its JavaScript output in a tab
 
             Args:
-                target: Tab identifier in format 'domain_tabId' (e.g., 'google.com_123')
+                target: Tab ID (e.g., "123") — must be a tab created by MCP.
                 script_name: Name of the external script to run
                 script_args: JSON array of strings to pass to the external script
                             (e.g., '["arg1", "arg2"]') or empty string for no arguments

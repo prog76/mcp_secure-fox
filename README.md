@@ -4,7 +4,7 @@ Secure FoxMCP browser-control MCP server.
 
 Extracts `SecureFoxMCPServer` / `SecureFoxMCPTools` out of the gateway into a
 standalone, installable Python package (`secure-fox`). It wraps the vendored
-upstream FoxMCP server with domain validation on tab-specific operations.
+upstream FoxMCP server with tab access control on tab-specific operations.
 
 Upstream compatibility: only `_setup_tab_tools`, `_setup_navigation_tools`,
 `_setup_content_tools` are overridden. All other tools (windows, history,
