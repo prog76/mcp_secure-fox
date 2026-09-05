@@ -627,6 +627,114 @@ class SecureFoxMCPTools(FoxMCPTools):
             return f"Unable to execute script in tab {tab_id}"
 
         @self.mcp.tool()
+        async def content_capture_element(
+            target: str,
+            xpath: str,
+            filename: Optional[str] = None,
+            format: str = "png",
+            quality: int = 90,
+            scroll_into_view: bool = True,
+            padding: int = 0,
+        ) -> str:
+            """Capture a screenshot of a single element, selected by XPath.
+
+            Locates the element in the tab, scrolls it into view, captures the
+            tab and crops the image to the element's box. The tab does not have
+            to be the active tab — background tabs are captured too.
+
+            Args:
+                target: Tab ID (e.g., "123") — must be a tab created by MCP.
+                xpath: XPath expression selecting the element (first match is used)
+                filename: Save the image to this file (optional)
+                format: Image format ('png' or 'jpeg', default: 'png')
+                quality: Image quality for JPEG format (1-100, default: 90)
+                scroll_into_view: Scroll the element into view before capturing (default: true)
+                padding: Extra CSS pixels captured around the element (default: 0)
+            """
+            tab_id, error = await self._validate_target(target)
+            if error:
+                return f"ACCESS DENIED: {error}"
+
+            request = {
+                "id": str(uuid.uuid4()),
+                "type": "request",
+                "action": "content.captureElement",
+                "data": {
+                    "tabId": tab_id,
+                    "xpath": xpath,
+                    "format": format,
+                    "quality": quality,
+                    "scrollIntoView": scroll_into_view,
+                    "padding": padding,
+                },
+                "timestamp": datetime.now().isoformat(),
+            }
+
+            response = await self.websocket_server.send_request_and_wait(request)
+
+            if "error" in response:
+                return f"Error capturing element: {response['error']}"
+
+            if response.get("type") == "error":
+                error_msg = response.get("data", {}).get("message", "Unknown error")
+                error_code = response.get("data", {}).get("code", "CAPTURE_ERROR")
+                return f"Failed to capture element ({error_code}): {error_msg}"
+
+            if response.get("type") == "response" and "data" in response:
+                data_url = response["data"].get("dataUrl", "")
+                captured_format = response["data"].get("format", format)
+                element = response["data"].get("element", {})
+                rect = response["data"].get("rect", {})
+                clipped = response["data"].get("clipped", {})
+
+                if not data_url:
+                    return "No element screenshot data received"
+
+                element_desc = element.get("tag", "element")
+                if element.get("id"):
+                    element_desc += f"#{element['id']}"
+
+                clip_amounts = {side: amount for side, amount in clipped.items() if amount}
+                clip_desc = ""
+                if clip_amounts:
+                    clip_parts = [f"{amount}px {side}" for side, amount in clip_amounts.items()]
+                    clip_desc = f" (clipped: {', '.join(clip_parts)})"
+
+                data_prefix = f"data:image/{captured_format};base64,"
+                if not data_url.startswith(data_prefix):
+                    return f"Element screenshot captured but unexpected format: {data_url[:100]}..."
+
+                base64_data = data_url[len(data_prefix):]
+
+                if filename:
+                    try:
+                        if not filename.lower().endswith((".png", ".jpg", ".jpeg")):
+                            filename = f"{filename}.{captured_format}"
+
+                        image_data = base64.b64decode(base64_data)
+                        with open(filename, "wb") as f:
+                            f.write(image_data)
+
+                        file_size = len(image_data)
+                        return (
+                            f"Element screenshot saved to '{filename}' "
+                            f"({element_desc} in tab {tab_id}, "
+                            f"{rect.get('width', '?')}x{rect.get('height', '?')} CSS px, "
+                            f"{captured_format}, size: {file_size} bytes){clip_desc}"
+                        )
+
+                    except Exception as e:
+                        return f"Error saving element screenshot to file '{filename}': {str(e)}"
+
+                data_size = len(base64_data)
+                return (
+                    f"Element screenshot captured successfully: {element_desc} in tab {tab_id}{clip_desc}:"
+                    f"\n{data_url[:100]}...\n\nBase64 data size: {data_size} characters"
+                )
+
+            return f"Unable to capture element in tab {tab_id}"
+
+        @self.mcp.tool()
         async def content_execute_predefined(
             target: str,
             script_name: str,
